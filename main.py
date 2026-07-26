@@ -15,13 +15,22 @@ PORT = int(os.environ.get('PORT', 8080))
 bot = telebot.TeleBot(BOT_TOKEN)
 
 # --- ВЕБ-СЕРВЕР ДЛЯ RENDER (Health Check) ---
-# Запускаем его в самом верху, чтобы Render мгновенно видел активный порт
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.send_header("Content-type", "text/plain")
         self.end_headers()
         self.wfile.write(b"Game server running")
+
+    def do_HEAD(self):
+        # Добавляем поддержку HEAD-запросов, которые шлет Render при деплое
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
+
+    def log_message(self, format, *args):
+        # Отключаем лишний спам логов в консоль Render
+        return
 
 def run_web_server():
     try:
@@ -61,7 +70,6 @@ def init_db():
     except Exception as e:
         print(f"Ошибка инициализации БД: {e}")
 
-# Проверяем таблицы после старта веб-сервера
 init_db()
 
 def get_user(user_id, username):
@@ -229,5 +237,4 @@ def item_purchase(call):
     markup.add(types.InlineKeyboardButton(f"🏃 Скорость (+1 ур) — 💰 {cost_speed} детей", callback_data="buy_speed"))
     
     bot.edit_message_text(f"🛒 *МАГАЗИН УЛУЧШЕНИЙ*\n\nБаланс детей: {user['children_count']}\nПокупай апгрейды за детей!", 
-                          call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
-
+    
