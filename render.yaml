@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: tg-watermelon-game
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    
