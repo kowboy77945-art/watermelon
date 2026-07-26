@@ -78,7 +78,7 @@ def get_top_players():
     conn.close()
     return top
 
-# --- ВЕБ-СЕРВЕР ДЛЯ РENDER ---
+# --- ВЕБ-СЕРВЕР ДЛЯ RENDER ---
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -87,7 +87,6 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"Game server running")
 
 def run_web_server():
-    # Сервер слушает порт, который требует Render (0.0.0.0:PORT)
     server = HTTPServer(('0.0.0.0', PORT), HealthCheckHandler)
     print(f"Веб-сервер запущен на порту {PORT}")
     server.serve_forever()
@@ -122,7 +121,7 @@ def show_profile(message):
             user = get_user(message.from_user.id, message.from_user.username)
             bot.send_message(message.chat.id, "🎉 Потомство успешно созрело! Дети добавлены в профиль.")
 
-    status = "Свободен" if user['is_breeding'] == 0 else f"⏳ Ожидание родов... ({int(max(0, user['ready_time'] - current_time))} сек)"
+    status = "Свободен" if user['is_breeding'] == 0 else f"⏳ Ожидание родов... ({int(max(0, user['ready_time'] - current_time))} sek)"
     
     profile_text = (
         f"👤 *Ваш профиль:*\n\n"
@@ -148,7 +147,7 @@ def choose_target(message):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("target_"))
 def choose_amount(call):
-    target = call.data.split("_")
+    target = call.data.split("_")[1]
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton("🌱 10 семян", callback_data=f"spawn_{target}_10"))
     markup.add(types.InlineKeyboardButton("🌿 50 семян", callback_data=f"spawn_{target}_50"))
@@ -192,7 +191,7 @@ def show_shop(message):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("buy_"))
 def item_purchase(call):
-    item = call.data.split("_")
+    item = call.data.split("_")[1]
     user_id = call.from_user.id
     user = get_user(user_id, call.from_user.username)
     
@@ -229,4 +228,4 @@ def show_top(message):
     top = get_top_players()
     top_text = "🏆 *ТОП-10 СЕМЕННЫХ МАГНАТОВ:*\n\n"
     for i, player in enumerate(top, 1):
-    
+        username = f"@{player['username']}" if player['username'] and not player['username'].startswith("User_") else player['username']
