@@ -7,14 +7,34 @@ from telebot import types
 import psycopg2
 from psycopg2.extras import DictCursor
 
-# Получаем настройки из скрытых переменных Render
+# Получаем настройки из переменных окружения
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
 DATABASE_URL = os.environ.get('DATABASE_URL')
 PORT = int(os.environ.get('PORT', 8080))
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# --- РАБОТА С БАЗОЙ ДАННЫХ (PostgreSQL) ---
+# --- ВЕБ-СЕРВЕР ДЛЯ RENDER (Health Check) ---
+# Запускаем его в самом верху, чтобы Render мгновенно видел активный порт
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"Game server running")
+
+def run_web_server():
+    try:
+        server = HTTPServer(('0.0.0.0', PORT), HealthCheckHandler)
+        print(f"Веб-сервер успешно запущен на порту {PORT}")
+        server.serve_forever()
+    except Exception as e:
+        print(f"Ошибка запуска веб-сервера: {e}")
+
+# Мгновенный запуск сервера в отдельном потоке
+threading.Thread(target=run_web_server, daemon=True).start()
+
+# --- РАБОТА С БАЗОЙ ДАННЫХ (PostgreSQL / Neon) ---
 def get_db_connection():
     return psycopg2.connect(DATABASE_URL, sslmode='require', cursor_factory=DictCursor)
 
@@ -41,6 +61,7 @@ def init_db():
     except Exception as e:
         print(f"Ошибка инициализации БД: {e}")
 
+# Проверяем таблицы после старта веб-сервера
 init_db()
 
 def get_user(user_id, username):
@@ -78,19 +99,6 @@ def get_top_players():
     conn.close()
     return top
 
-# --- ВЕБ-СЕРВЕР ДЛЯ RENDER ---
-class HealthCheckHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-type", "text/plain")
-        self.end_headers()
-        self.wfile.write(b"Game server running")
-
-def run_web_server():
-    server = HTTPServer(('0.0.0.0', PORT), HealthCheckHandler)
-    print(f"Веб-сервер запущен на порту {PORT}")
-    server.serve_forever()
-
 # --- ЛОГИКА ИГРЫ В TELEGRAM ---
 def main_menu_keyboard():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
@@ -121,7 +129,7 @@ def show_profile(message):
             user = get_user(message.from_user.id, message.from_user.username)
             bot.send_message(message.chat.id, "🎉 Потомство успешно созрело! Дети добавлены в профиль.")
 
-    status = "Свободен" if user['is_breeding'] == 0 else f"⏳ Ожидание родов... ({int(max(0, user['ready_time'] - current_time))} sek)"
+    status = "Свободен" if user['is_breeding'] == 0 else f"⏳ Ожидание родов... ({int(max(0, user['ready_time'] - current_time))} сек)"
     
     profile_text = (
         f"👤 *Ваш профиль:*\n\n"
@@ -147,7 +155,7 @@ def choose_target(message):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("target_"))
 def choose_amount(call):
-    target = call.data.split("_")[1]
+    target = call.data.split("_")
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton("🌱 10 семян", callback_data=f"spawn_{target}_10"))
     markup.add(types.InlineKeyboardButton("🌿 50 семян", callback_data=f"spawn_{target}_50"))
@@ -191,7 +199,7 @@ def show_shop(message):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("buy_"))
 def item_purchase(call):
-    item = call.data.split("_")[1]
+    item = call.data.split("_")
     user_id = call.from_user.id
     user = get_user(user_id, call.from_user.username)
     
@@ -223,9 +231,3 @@ def item_purchase(call):
     bot.edit_message_text(f"🛒 *МАГАЗИН УЛУЧШЕНИЙ*\n\nБаланс детей: {user['children_count']}\nПокупай апгрейды за детей!", 
                           call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
-@bot.message_handler(func=lambda m: m.text == "🏆 Топ игроков")
-def show_top(message):
-    top = get_top_players()
-    top_text = "🏆 *ТОП-10 СЕМЕННЫХ МАГНАТОВ:*\n\n"
-    for i, player in enumerate(top, 1):
-        username = f"@{player['username']}" if player['username'] and not player['username'].startswith("User_") else player['username']
