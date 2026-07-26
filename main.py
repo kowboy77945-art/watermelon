@@ -7,15 +7,43 @@ from telebot import types
 import psycopg2
 from psycopg2.extras import DictCursor
 
-# Инициализация токена и БД из переменных окружения Render
+# Получаем настройки из скрытых переменных Render
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
 DATABASE_URL = os.environ.get('DATABASE_URL')
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# --- РАБОТА С БАЗОЙ ДАННЫХ (Supabase / PostgreSQL) ---
+# --- РАБОТА С БАЗОЙ ДАННЫХ (PostgreSQL) ---
+
 def get_db_connection():
     return psycopg2.connect(DATABASE_URL, sslmode='require', cursor_factory=DictCursor)
+
+def init_db():
+    """Автоматическое создание таблицы при старте бота"""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                user_id BIGINT PRIMARY KEY,
+                username TEXT,
+                children_count INT DEFAULT 0,
+                is_breeding INT DEFAULT 0,
+                ready_time DOUBLE PRECISION DEFAULT 0,
+                temp_count INT DEFAULT 0,
+                seed_multiplier INT DEFAULT 1,
+                speed_level INT DEFAULT 1
+            );
+        ''')
+        conn.commit()
+        cur.close()
+        conn.close()
+        print("База данных успешно проверена/создана!")
+    except Exception as e:
+        print(f"Ошибка инициализации БД: {e}")
+
+# Запускаем создание таблицы при старте скрипта
+init_db()
 
 def get_user(user_id, username):
     conn = get_db_connection()
@@ -52,7 +80,7 @@ def get_top_players():
     conn.close()
     return top
 
-# --- ВЕБ-СЕРВЕР ДЛЯ RENDER ---
+# --- ВЕБ-СЕРВЕР ДЛЯ RENDER (Health Check) ---
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -63,7 +91,8 @@ def run_web_server():
     server = HTTPServer(('0.0.0.0', int(os.environ.get('PORT', 8080))), HealthCheckHandler)
     server.serve_forever()
 
-# --- ЛОГИКА ИГРЫ ---
+# --- ЛОГИКА ИГРЫ В TELEGRAM ---
+
 def main_menu_keyboard():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add(types.KeyboardButton("🍉 Запустить семена"), types.KeyboardButton("👤 Профиль"))
@@ -84,7 +113,6 @@ def show_profile(message):
     user = get_user(message.from_user.id, message.from_user.username)
     current_time = time.time()
     
-    # Автоматический чек готовности таймера при открытии профиля
     if user['is_breeding'] == 1:
         if current_time >= user['ready_time']:
             new_children = user['children_count'] + (user['temp_count'] * user['seed_multiplier'])
@@ -97,7 +125,7 @@ def show_profile(message):
     status = "Свободен" if user['is_breeding'] == 0 else f"⏳ Ожидание родов... ({int(max(0, user['ready_time'] - current_time))} сек)"
     
     profile_text = (
-        f"👤 *Ваш профиum:*\n\n"
+        f"👤 *Ваш профиль:*\n\n"
         f"🍼 Рождено детей: {user['children_count']}\n"
         f"⚡ Множитель семян: x{user['seed_multiplier']}\n"
         f"🏃 Уровень скорости: {user['speed_level']}\n"
@@ -135,9 +163,8 @@ def start_timer(call):
     user_id = call.from_user.id
     user = get_user(user_id, call.from_user.username)
     
-    # Подсчет времени с учетом уровня скорости (базовое: 15, 45, 90 сек)
     base_duration = 15 if amount == 10 else (45 if amount == 50 else 90)
-    duration = max(5, base_duration - (user['speed_level'] * 2))  # Каждая прокачка срезает 2 секунды
+    duration = max(5, base_duration - (user['speed_level'] * 2))  
     
     ready_time = time.time() + duration
     
@@ -160,7 +187,7 @@ def show_shop(message):
     markup.add(types.InlineKeyboardButton(f"🧬 Множитель (х{user['seed_multiplier']+1}) — 💰 {cost_mult} детей", callback_data="buy_mult"))
     markup.add(types.InlineKeyboardButton(f"🏃 Скорость (+1 ур) — 💰 {cost_speed} детей", callback_data="buy_speed"))
     
-    bot.send_message(message.chat.id, f"🛒 *МАГАЗИН УЛУЧШЕНИЙ*\n\nБаланс детей: {user['children_count']}\nПокупай апгрейды за детей, чтобы рожать больше и быстрее!", 
+    bot.send_message(message.chat.id, f"🛒 *МАГАЗИН УЛУЧШЕНИЙ*\n\nБаланс детей: {user['children_count']}\nПокупай апгрейды за детей!", 
                      reply_markup=markup, parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("buy_"))
@@ -174,9 +201,9 @@ def item_purchase(call):
         if user['children_count'] >= cost:
             update_user(user_id, 'children_count', user['children_count'] - cost)
             update_user(user_id, 'seed_multiplier', user['seed_multiplier'] + 1)
-            bot.answer_callback_query(call.id, "✅ Множитель успешно увеличен!")
+            bot.answer_callback_query(call.id, "✅ Множитель увеличен!")
         else:
-            bot.answer_callback_query(call.id, "❌ Недостаточно детей для покупки!", show_alert=True)
+            bot.answer_callback_query(call.id, "❌ Недостаточно детей!", show_alert=True)
             
     elif item == "speed":
         cost = user['speed_level'] * 100
@@ -185,10 +212,17 @@ def item_purchase(call):
             update_user(user_id, 'speed_level', user['speed_level'] + 1)
             bot.answer_callback_query(call.id, "✅ Скорость инкубации повышена!")
         else:
-            bot.answer_callback_query(call.id, "❌ Недостаточно детей для покупки!", show_alert=True)
+            bot.answer_callback_query(call.id, "❌ Недостаточно детей!", show_alert=True)
 
-    # Обновление меню магазина после покупки
-    show_shop(call.message)
+    user = get_user(user_id, call.from_user.username)
+    cost_mult = user['seed_multiplier'] * 150
+    cost_speed = user['speed_level'] * 100
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton(f"🧬 Множитель (х{user['seed_multiplier']+1}) — 💰 {cost_mult} детей", callback_data="buy_mult"))
+    markup.add(types.InlineKeyboardButton(f"🏃 Скорость (+1 ур) — 💰 {cost_speed} детей", callback_data="buy_speed"))
+    
+    bot.edit_message_text(f"🛒 *МАГАЗИН УЛУЧШЕНИЙ*\n\nБаланс детей: {user['children_count']}\nПокупай апгрейды за детей!", 
+                          call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.text == "🏆 Топ игроков")
 def show_top(message):
@@ -196,10 +230,4 @@ def show_top(message):
     top_text = "🏆 *ТОП-10 СЕМЕННЫХ МАГНАТОВ:*\n\n"
     for i, player in enumerate(top, 1):
         username = f"@{player['username']}" if player['username'] and not player['username'].startswith("User_") else player['username']
-        top_text += f"{i}. {username} — {player['children_count']} детей\n"
-    bot.send_message(message.chat.id, top_text, parse_mode="Markdown")
-
-if __name__ == "__main__":
-    threading.Thread(target=run_web_server, daemon=True).start()
-    bot.infinity_polling()
-  
+    
